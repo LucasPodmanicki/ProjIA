@@ -1,0 +1,112 @@
+#include <webots/robot.h>
+#include <webots/motor.h>
+#include <webots/distance_sensor.h>
+#include <webots/supervisor.h>
+#include <webots/led.h>
+
+#define TIME_STEP 256
+#define MAX_SPEED 6.28
+#define OBSTACLE_THRESHOLD 100
+#define NUM_LEDS 10
+#define TOLERANCE 1e-4
+
+// Função para inicializar o robô e obter as referências dos motores e LEDs
+void inicializar_robo(WbDeviceTag *motor_esquerdo, WbDeviceTag *motor_direito, WbDeviceTag *leds) {
+  *motor_esquerdo = wb_robot_get_device("left wheel motor");
+  *motor_direito = wb_robot_get_device("right wheel motor");
+
+  // Define a intensidade do LED para o máximo
+  leds[0] = wb_robot_get_device("led0");
+  wb_led_set(leds[0], -1);
+
+  // Define a posição dos motores como infinito
+  wb_motor_set_position(*motor_esquerdo, INFINITY);
+  wb_motor_set_position(*motor_direito, INFINITY);
+
+  // Define a velocidade inicial dos motores como zero
+  wb_motor_set_velocity(*motor_esquerdo, 0.0);
+  wb_motor_set_velocity(*motor_direito, 0.0);
+}
+
+// Função para inicializar os sensores de proximidade do robô
+void inicializar_sensores_proximidade(WbDeviceTag *sensores_proximidade) {
+  const char *nomes_sensores_proximidade[] = {
+    "ps0", "ps1", "ps2", "ps3", "ps4", "ps5", "ps6", "ps7"
+  };
+  for (int i = 0; i < 8; i++) {
+    sensores_proximidade[i] = wb_robot_get_device(nomes_sensores_proximidade[i]);
+    wb_distance_sensor_enable(sensores_proximidade[i], TIME_STEP);
+  }
+}
+
+// Função para ajustar a velocidade dos motores com base nos valores dos sensores de proximidade
+void ajustar_velocidade(const double *valores_sensores, double *velocidade_esquerda, double *velocidade_direita) {
+  *velocidade_esquerda = MAX_SPEED;
+  *velocidade_direita = MAX_SPEED;
+
+  if (valores_sensores[0] > OBSTACLE_THRESHOLD || valores_sensores[7] > OBSTACLE_THRESHOLD) {
+    // Se os sensores frontais (0 ou 7) detectarem um obstáculo acima do limiar,
+    // o robô vira à esquerda até que não tenha um obstáculo.
+    *velocidade_esquerda = -MAX_SPEED;
+    *velocidade_direita = MAX_SPEED / 2;
+  } else if (valores_sensores[6] > OBSTACLE_THRESHOLD) {
+    // Se o sensor 6 (esquerda) detectar um obstáculo acima do limiar,
+    // o robô vira à direita até que não tenha um obstáculo.
+    *velocidade_esquerda = MAX_SPEED / 2;
+    *velocidade_direita = -MAX_SPEED;
+  } else if (valores_sensores[1] > OBSTACLE_THRESHOLD) {
+    // Se o sensor 1 (direita) detectar um obstáculo acima do limiar,
+    // o robô vira à esquerda até que não tenha um obstáculo.
+    *velocidade_esquerda = -MAX_SPEED;
+    *velocidade_direita = MAX_SPEED / 2;
+  }
+
+  // Limita as velocidades máximas dos motores
+  if (*velocidade_esquerda > MAX_SPEED) *velocidade_esquerda = MAX_SPEED;
+  if (*velocidade_esquerda < -MAX_SPEED) *velocidade_esquerda = -MAX_SPEED;
+  if (*velocidade_direita > MAX_SPEED) *velocidade_direita = MAX_SPEED;
+  if (*velocidade_direita < -MAX_SPEED) *velocidade_direita = -MAX_SPEED;
+}
+
+int main(int argc, char **argv) {
+  wb_robot_init();
+
+  WbDeviceTag motor_esquerdo, motor_direito, leds[NUM_LEDS];
+  inicializar_robo(&motor_esquerdo, &motor_direito, leds);
+
+  WbDeviceTag sensores_proximidade[8];
+  inicializar_sensores_proximidade(sensores_proximidade);
+
+  WbNodeRef objetoNode = wb_supervisor_node_get_from_def("wooden-box");
+  const double *posicao = wb_supervisor_node_get_position(objetoNode);
+  double xb = posicao[0], yb = posicao[1];
+  double x = xb, y = yb;
+
+  while (wb_robot_step(TIME_STEP) != -1) {
+    double valores_sensores[8];
+    for (int i = 0; i < 8; i++) {
+      valores_sensores[i] = wb_distance_sensor_get_value(sensores_proximidade[i]);
+    }
+    const double *caixa = wb_supervisor_node_get_position(objetoNode);
+    xb = caixa[0], yb = caixa[1];
+
+    double velocidade_esquerda, velocidade_direita;
+    ajustar_velocidade(valores_sensores, &velocidade_esquerda, &velocidade_direita);
+
+    if (fabs(xb - x) > TOLERANCE || fabs(yb - y) > TOLERANCE) {
+      // Se a caixa foi movida além da tolerância definida, então a caixa leve foi encontrada.
+      // Com isso, os motores são parados, inverte o LED e imprime uma mensagem.
+      velocidade_esquerda = 0;
+      velocidade_direita = 0;
+      wb_led_set(leds[0], wb_led_get(leds[0]) * -1);
+      printf("[+] Caixa leve encontrada!\n");
+    }
+
+    wb_motor_set_velocity(motor_esquerdo, velocidade_esquerda);
+    wb_motor_set_velocity(motor_direito, velocidade_direita);
+  }
+
+  wb_robot_cleanup();
+
+  return 0;
+}
